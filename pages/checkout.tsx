@@ -1,4 +1,5 @@
-import { useWallet } from "@solana/wallet-adapter-react";
+import { findTransactionSignature, FindTransactionSignatureError } from "@solana/pay";
+import { useConnection, useWallet } from "@solana/wallet-adapter-react";
 import { WalletMultiButton } from "@solana/wallet-adapter-react-ui";
 import { Keypair, Transaction } from "@solana/web3.js";
 import { useRouter } from "next/router";
@@ -9,7 +10,8 @@ import { MakeTransactionInputData, MakeTransactionOutputData } from "./api/makeT
 
 export default function Checkout() {
   const router = useRouter();
-  const { publicKey } = useWallet();
+  const { connection } = useConnection();
+  const { publicKey, sendTransaction } = useWallet();
 
   // State to hold API response fields
   const [transaction, setTransaction] = useState<Transaction | null>(null);
@@ -70,6 +72,43 @@ export default function Checkout() {
   useEffect(() => {
     getTransaction()
   }, [publicKey])
+
+  // Send the fetched transaction to the connected wallet
+  async function trySendTransaction() {
+    if (!transaction) {
+      return;
+    }
+    try {
+      await sendTransaction(transaction, connection)
+    } catch (e) {
+      console.error(e)
+    }
+  }
+
+  // Send the transaction once it's fetched
+  useEffect(() => {
+    trySendTransaction()
+  }, [transaction])
+
+  // Check every 0.5s if the transaction is completed
+  useEffect(() => {
+    const interval = setInterval(async () => {
+      try {
+        // Check if there is any transaction for the reference
+        const signatureInfo = await findTransactionSignature(connection, reference)
+        router.push('/confirmed')
+      } catch (e) {
+        if (e instanceof FindTransactionSignatureError) {
+          // No transaction found yet, ignore this error
+          return;
+        }
+        console.error('Unknown error', e)
+      }
+    }, 500)
+    return () => {
+      clearInterval(interval)
+    }
+  }, [])
 
   if (!publicKey) {
     return (
