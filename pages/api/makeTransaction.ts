@@ -1,11 +1,17 @@
+import { createTransferCheckedInstruction, getAssociatedTokenAddress, getMint } from "@solana/spl-token"
 import { WalletAdapterNetwork } from "@solana/wallet-adapter-base"
-import { clusterApiUrl, Connection, PublicKey, Transaction, SystemProgram, LAMPORTS_PER_SOL } from "@solana/web3.js"
+import { clusterApiUrl, Connection, PublicKey, Transaction } from "@solana/web3.js"
 import { NextApiRequest, NextApiResponse } from "next"
-import { shopAddress } from "../../lib/addresses"
+import { shopAddress, usdcAddress } from "../../lib/addresses"
 import calculatePrice from "../../lib/calculatePrice"
 
 export type MakeTransactionInputData = {
   account: string,
+}
+
+type MakeTransactionGetResponse = {
+  label: string,
+  icon: string,
 }
 
 export type MakeTransactionOutputData = {
@@ -17,7 +23,14 @@ type ErrorOutput = {
   error: string
 }
 
-export default async function handler(
+function get(res: NextApiResponse<MakeTransactionGetResponse>) {
+  res.status(200).json({
+    label: "Cookies Inc",
+    icon: "https://freesvg.org/img/1370962427.png",
+  })
+}
+
+async function post(
   req: NextApiRequest,
   res: NextApiResponse<MakeTransactionOutputData | ErrorOutput>
 ) {
@@ -39,7 +52,7 @@ export default async function handler(
     // We pass the buyer's public key in JSON body
     const { account } = req.body as MakeTransactionInputData
     if (!account) {
-      res.status(400).json({ error: "No account provided" })
+      res.status(40).json({ error: "No account provided" })
       return
     }
     const buyerPublicKey = new PublicKey(account)
@@ -48,6 +61,13 @@ export default async function handler(
     const network = WalletAdapterNetwork.Devnet
     const endpoint = clusterApiUrl(network)
     const connection = new Connection(endpoint)
+
+    // Get details about the USDC token
+    const usdcMint = await getMint(connection, usdcAddress)
+    // Get the buyer's USDC token account address
+    const buyerUsdcAddress = await getAssociatedTokenAddress(usdcAddress, buyerPublicKey)
+    // Get the shop's USDC token account address
+    const shopUsdcAddress = await getAssociatedTokenAddress(usdcAddress, shopPublicKey)
 
     // Get a recent blockhash to include in the transaction
     const { blockhash } = await (connection.getLatestBlockhash('finalized'))
@@ -58,12 +78,15 @@ export default async function handler(
       feePayer: buyerPublicKey,
     })
 
-    // Create the instruction to send SOL from the buyer to the shop
-    const transferInstruction = SystemProgram.transfer({
-      fromPubkey: buyerPublicKey,
-      lamports: amount.multipliedBy(LAMPORTS_PER_SOL).toNumber(),
-      toPubkey: shopPublicKey,
-    })
+    // Create the instruction to send USDC from the buyer to the shop
+    const transferInstruction = createTransferCheckedInstruction(
+      buyerUsdcAddress, // source
+      usdcAddress, // mint (token address)
+      shopUsdcAddress, // destination
+      buyerPublicKey, // owner of source address
+      amount.toNumber() * (10 ** usdcMint.decimals), // amount to transfer (in units of the USDC token)
+      usdcMint.decimals, // decimals of the USDC token
+    )
 
     // Add the reference to the instruction as a key
     // This will mean this transaction is returned when we query for the reference
@@ -95,5 +118,18 @@ export default async function handler(
 
     res.status(500).json({ error: 'error creating transaction', })
     return
+  }
+}
+
+export default async function handler(
+  req: NextApiRequest,
+  res: NextApiResponse<MakeTransactionGetResponse | MakeTransactionOutputData | ErrorOutput>
+) {
+  if (req.method === "GET") {
+    return get(res)
+  } else if (req.method === "POST") {
+    return await post(req, res)
+  } else {
+    return res.status(405).json({ error: "Method not allowed" })
   }
 }
